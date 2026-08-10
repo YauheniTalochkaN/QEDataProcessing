@@ -1,11 +1,9 @@
 data_dir: "/home/yauhenitalochka/mnt/Files/QE_projects/CsI/outdir/csi.save/"
 data_schema_file: "data-file-schema.xml"
-group: "Ci(-1)"
-inv: true
+use_inv: true
 Eg_exp: 6.1
 gsp: 2.0
-last_occupied: 7
-En_step: 0.003
+En_step: 0.005
 smearing: 0.01
 num_k_neighbors: 22
 torch_device: "CUDA"

@@ -61,7 +61,7 @@ find_package(CGAL REQUIRED COMPONENTS Qt6 Core)
 
 #----------------------------------------------------------------------------------------------------------------------
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} -Wall -O2 -fPIC -ffast-math -mavx -flarge-source-files")
 
@@ -72,43 +72,35 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 
 #----------------------------------------------------------------------------------------------------------------------
 
-file(GLOB sources ${PROJECT_SOURCE_DIR}/src/*.cc)
 file(GLOB DOS_gVel_Eps_source ${PROJECT_SOURCE_DIR}/DOS_gVel_Eps.cc)
 
-#----------------------------------------------------------------------------------------------------------------------
-
-add_library(QEDataProcessing SHARED ${sources})
-target_include_directories(QEDataProcessing PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_compile_features(QEDataProcessing PUBLIC cxx_std_17 cuda_std_17)
-target_link_libraries(QEDataProcessing PUBLIC ${TORCH_LIBRARIES}  
-                                              CUDA::cudart 
-                                              CUDA::cublas 
-                                              CUDA::cusparse 
-                                              CUDA::cufft 
-                                              CUDA::curand
-                                              CUDA::cusolver
-                                              CUDA::cupti
-                                              nccl
-                                              nvshmem_host
-                                              cudnn
-                                              cusparseLt
-                                              cudss
-                                              cufile
-                                              nvtx3-cpp
-                                              ${ROOT_LIBRARIES} 
-                                              ${ROOT_EXE_LINKER_FLAGS}
-                                              CGAL::CGAL
-                                              CGAL::CGAL_Basic_viewer
-                                              #OpenMP::OpenMP_CXX
-                                              yaml-cpp
-                                              pugixml::pugixml)
-                                 
 #----------------------------------------------------------------------------------------------------------------------
 
 add_executable(DOS_gVel_Eps ${DOS_gVel_Eps_source})
 target_include_directories(DOS_gVel_Eps PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(DOS_gVel_Eps PRIVATE cxx_std_17 cuda_std_17)
-target_link_libraries(DOS_gVel_Eps PRIVATE QEDataProcessing)
+target_link_libraries(DOS_gVel_Eps PUBLIC ${TORCH_LIBRARIES}  
+                                          CUDA::cudart 
+                                          CUDA::cublas 
+                                          CUDA::cusparse 
+                                          CUDA::cufft 
+                                          CUDA::curand
+                                          CUDA::cusolver
+                                          CUDA::cupti
+                                          nccl
+                                          nvshmem_host
+                                          cudnn
+                                          cusparseLt
+                                          cudss
+                                          cufile
+                                          nvtx3-cpp
+                                          ${ROOT_LIBRARIES} 
+                                          ${ROOT_EXE_LINKER_FLAGS}
+                                          CGAL::CGAL
+                                          CGAL::CGAL_Basic_viewer
+                                          #OpenMP::OpenMP_CXX
+                                          yaml-cpp
+                                          pugixml::pugixml)
 
 #----------------------------------------------------------------------------------------------------------------------
 

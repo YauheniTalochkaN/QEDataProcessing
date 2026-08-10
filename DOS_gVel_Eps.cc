@@ -10,7 +10,6 @@
 #include <algorithm>
 
 #include "Constants.hh"
-#include "PointGroupOperations.hh"
 
 #include "pugixml.hpp"
 #include <yaml-cpp/yaml.h>
@@ -44,13 +43,15 @@ typedef CGAL::Search_traits_3<epic_kernel_CGAL> st_CGAL;
 typedef CGAL::Kd_tree<st_CGAL> kdt_CGAL;
 typedef CGAL::K_neighbor_search<st_CGAL> kns_CGAL;
 
+using PointGenerator = std::function<std::vector<TVector3>(const TVector3&)>;
+
 struct TVector3Hash 
 {
     inline std::size_t operator()(const TVector3& v) const 
     {
         auto quantize = [](double x) -> double 
                         {
-                            return std::round(x / Constants::k_eps) * Constants::k_eps;
+                            return std::trunc(x / Constants::k_eps) * Constants::k_eps;
                         };
 
         std::size_t seed = 0;
@@ -117,17 +118,13 @@ int main(int argc, char* argv[])
     
     std::string data_dir = yaml_node["data_dir"].as<std::string>();
     std::string data_schema_file = yaml_node["data_schema_file"].as<std::string>();
-    std::string group = yaml_node["group"].as<std::string>();
-    bool inv = yaml_node["inv"].as<bool>();
+    bool use_inv = yaml_node["use_inv"].as<bool>();
     double Eg_exp = yaml_node["Eg_exp"].as<double>();
     double gsp = yaml_node["gsp"].as<double>();
-    int64_t last_occupied = yaml_node["last_occupied"].as<int64_t>();
     double En_step = yaml_node["En_step"].as<double>();
     double smearing = yaml_node["smearing"].as<double>();
     int32_t num_k_neighbors = yaml_node["num_k_neighbors"].as<int32_t>();
     std::string torch_device = yaml_node["torch_device"].as<std::string>();
-
-    auto GroupGenerator = PointGroupOperations::GetPointGroupOperations(group);
 
     torch::Device device = torch::kCPU;
 
@@ -167,6 +164,7 @@ int main(int argc, char* argv[])
         std::exit(1);
     }
 
+    int64_t last_occupied = 0L;
     std::vector<TVector3> irreducible_kvec_list;
     std::vector<std::vector<double>> irreducible_energy_list;
 
@@ -183,12 +181,27 @@ int main(int argc, char* argv[])
 
         for(pugi::xml_node ev_node : ks_node.children("eigenvalues")) 
         {
-            std::vector<double> evals = parseDoubleLine(ev_node.child_value());
+            std::vector<double> vals = parseDoubleLine(ev_node.child_value());
 
-            std::transform(evals.begin(), evals.end(), evals.begin(), 
+            std::transform(vals.begin(), vals.end(), vals.begin(), 
                           [](double x) -> double {return x * 2.0 * Constants::Ry;});
 
-            irreducible_energy_list.push_back(evals);
+            irreducible_energy_list.push_back(vals);
+        }
+
+        for(pugi::xml_node occv_node : ks_node.children("occupations")) 
+        {
+            std::vector<double> vals = parseDoubleLine(occv_node.child_value());
+
+            auto it = std::find_if(vals.begin(), vals.end(),
+                                   [](double x) {return std::abs(x) < std::numeric_limits<double>::epsilon();});
+            
+            if(it != vals.end()) 
+            {
+                int64_t idx = std::distance(vals.begin(), it) - 1UL;
+                
+                last_occupied = std::max(last_occupied, idx);
+            }
         }
     }
 
@@ -236,6 +249,55 @@ int main(int argc, char* argv[])
 
     TMatrixD Mb_inv = Mb;
     Mb_inv.Invert();
+
+    pugi::xml_node symmetries_node = xml_doc.select_node("//symmetries").node();
+
+    std::vector<TMatrixD> group_matrices;
+
+    for(pugi::xml_node symmetry_node : symmetries_node.children("symmetry")) 
+    {
+        pugi::xml_node rotation_node = symmetry_node.child("rotation");
+        
+        std::vector<double> vals1 = parseDoubleLine(rotation_node.child_value());
+
+        TMatrixD G(3, 3);
+
+        G[0][0] = vals1[0]; G[0][1] = vals1[1]; G[0][2] = vals1[2];
+        G[1][0] = vals1[3]; G[1][1] = vals1[4]; G[1][2] = vals1[5];
+        G[2][0] = vals1[6]; G[2][1] = vals1[7]; G[2][2] = vals1[8];
+
+        group_matrices.push_back(Mb * G.Invert().T() * Mb_inv);
+    }   
+
+    PointGenerator group_generator = [&group_matrices, &Mb, &Mb_inv](const TVector3& vec) -> std::vector<TVector3>
+    {
+        std::vector<TVector3> result;
+
+        auto wrap_frac = [](double x) -> double 
+        {
+            double w = std::fmod(x, 1.0);
+            
+            if (w > 0.5)  w -= 1.0;
+            if (w < -0.5) w += 1.0;
+            
+            return w;
+        };
+
+        for(const auto& g : group_matrices)
+        {
+            TVector3 k_c = g * vec;
+
+            TVector3 k_b = Mb_inv * k_c;
+
+            k_b.SetX(wrap_frac(k_b.X()));
+            k_b.SetY(wrap_frac(k_b.Y()));
+            k_b.SetZ(wrap_frac(k_b.Z()));
+
+            result.push_back(Mb * k_b);
+        }
+
+        return result;
+    };
 
     torch::NoGradGuard no_grad;
 
@@ -314,7 +376,7 @@ int main(int argc, char* argv[])
 
     constexpr auto is_border = [](double b) -> bool
     {
-        return (std::abs(b) <= (0.5 + Constants::k_eps)) && (std::abs(b) >= (0.5 - Constants::k_eps));
+        return (std::abs(b) <= (0.5 + 10.0 * Constants::k_eps)) && (std::abs(b) >= (0.5 - 10.0 * Constants::k_eps));
     };
 
     auto add_translations_if_border = [&b1, &b2, &b3, &Mb_inv, is_border](std::vector<TVector3>& list)
@@ -339,9 +401,9 @@ int main(int argc, char* argv[])
 
                             TVector3 tvec_b = Mb_inv * tvec;
 
-                            if((std::abs(tvec_b.X()) <= (0.5 + Constants::k_eps)) &&
-                               (std::abs(tvec_b.Y()) <= (0.5 + Constants::k_eps)) &&
-                               (std::abs(tvec_b.Z()) <= (0.5 + Constants::k_eps)))
+                            if((std::abs(tvec_b.X()) <= (0.5 + 10.0 * Constants::k_eps)) &&
+                               (std::abs(tvec_b.Y()) <= (0.5 + 10.0 * Constants::k_eps)) &&
+                               (std::abs(tvec_b.Z()) <= (0.5 + 10.0 * Constants::k_eps)))
                             {
                                 list.push_back(tvec);   
                             }
@@ -355,13 +417,8 @@ int main(int argc, char* argv[])
     std::vector<int64_t> rkvec_to_irrkvec;
 
     for(size_t i = 0; i < num_irreducible_kvecs; ++i)
-    {
-        TVector3 irr_k_b = Mb_inv * irreducible_kvec_list[i];
-        
-        std::vector<TVector3> all_kvecs = GroupGenerator(irr_k_b);
-
-        std::transform(all_kvecs.begin(), all_kvecs.end(), all_kvecs.begin(), 
-                       [&Mb](TVector3 vec) -> TVector3 {return Mb * vec;});
+    {        
+        std::vector<TVector3> all_kvecs = group_generator(irreducible_kvec_list[i]);
 
         add_translations_if_border(all_kvecs);
 
@@ -373,9 +430,9 @@ int main(int argc, char* argv[])
 
                 TVector3 vec_b = Mb_inv * vec;
 
-                kpoint_b_cgal_list.emplace_back(std::trunc(vec_b.X() / Constants::k_eps) * Constants::k_eps, 
-                                                std::trunc(vec_b.Y() / Constants::k_eps) * Constants::k_eps, 
-                                                std::trunc(vec_b.Z() / Constants::k_eps) * Constants::k_eps);
+                kpoint_b_cgal_list.emplace_back(std::round(vec_b.X() / Constants::k_eps) * Constants::k_eps, 
+                                                std::round(vec_b.Y() / Constants::k_eps) * Constants::k_eps, 
+                                                std::round(vec_b.Z() / Constants::k_eps) * Constants::k_eps);
 
                 kpoint_cart_cgal_list.emplace_back(vec.X(), vec.Y(), vec.Z());
 
@@ -440,7 +497,7 @@ int main(int argc, char* argv[])
 
             point_CGAL kpoint_b = cit->vertex(i)->point();
 
-            if((kpoint_b.x() < -Constants::k_eps) && inv)
+            if((kpoint_b.x() < -Constants::k_eps) && use_inv)
             {
                 take = false;   
             }
@@ -861,7 +918,7 @@ int main(int argc, char* argv[])
 
         torch::Tensor result = peps2.sum(1);
 
-        if(inv)
+        if(use_inv)
         {
             Eps2 += torch::real(result + result.transpose(1, 2).conj()) * tetrahedron_volume_list[i];
         }
