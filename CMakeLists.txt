@@ -78,7 +78,7 @@ file(GLOB DOS_gVel_Eps_source ${PROJECT_SOURCE_DIR}/DOS_gVel_Eps.cc)
 
 add_executable(DOS_gVel_Eps ${DOS_gVel_Eps_source})
 target_include_directories(DOS_gVel_Eps PRIVATE ${PROJECT_SOURCE_DIR}/include)
-target_compile_features(DOS_gVel_Eps PRIVATE cxx_std_17 cuda_std_17)
+target_compile_features(DOS_gVel_Eps PRIVATE cxx_std_20 cuda_std_20)
 target_link_libraries(DOS_gVel_Eps PUBLIC ${TORCH_LIBRARIES}  
                                           CUDA::cudart 
                                           CUDA::cublas 
