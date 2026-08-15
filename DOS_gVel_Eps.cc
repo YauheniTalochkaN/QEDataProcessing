@@ -312,7 +312,7 @@ int main(int argc, char* argv[])
 
         if(!wfc_file)
         {
-            std::cerr << "Failed to open XML file " << filename << std::endl;
+            std::cerr << "Failed to open wfc file " << filename << std::endl;
             std::exit(1);
         }
 
