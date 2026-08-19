@@ -589,6 +589,9 @@ int main(int argc, char* argv[])
         } */
     }
 
+    wfc_ten_list.clear();
+    Gk_ten_list.clear();
+
     //Wnm_file.close();
 
     std::cout << "M_ij(n,m,k) were calculated." << std::endl;
@@ -966,7 +969,10 @@ int main(int argc, char* argv[])
     std::chrono::duration<double> elapsed = finish - start;
     std::cout << "Spent time: " << elapsed.count() << " s." << std::endl;
 
-    c10::cuda::CUDACachingAllocator::emptyCache();
+    if(torch_device == "CUDA")
+    {
+        c10::cuda::CUDACachingAllocator::emptyCache();
+    }
 
     std::cout << "Saving data..." << std::endl;
 
