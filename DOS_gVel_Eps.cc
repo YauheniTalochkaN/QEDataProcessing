@@ -194,7 +194,7 @@ int main(int argc, char* argv[])
             std::vector<double> vals = parseDoubleLine(occv_node.child_value());
 
             auto it = std::find_if(vals.begin(), vals.end(),
-                                   [](double x) {return std::abs(x) < std::numeric_limits<double>::epsilon();});
+                                   [](double x) {return std::abs(x) < 1.0E-4;});
             
             if(it != vals.end()) 
             {
@@ -313,7 +313,11 @@ int main(int argc, char* argv[])
         if(!wfc_file)
         {
             std::cerr << "Failed to open wfc file " << filename << std::endl;
-            std::exit(1);
+
+            wfc_ten_list.clear();
+            Gk_ten_list.clear();
+            
+            break;
         }
 
         wfc_file.seekg(60, std::ios::cur);
@@ -464,7 +468,15 @@ int main(int argc, char* argv[])
     
     torch::Tensor Eshift = torch::empty({num_branches}, energyTen.options());
     Eshift.slice(0, 0, last_occupied + 1).fill_(Et_vb_val);
-    Eshift.slice(0, last_occupied + 1).fill_(Eop_cb_val + Et_vb_val - Eop_vb_val - Eg_exp);
+    
+    if(Eg_exp >= 0.0)
+    {       
+        Eshift.slice(0, last_occupied + 1).fill_(Eop_cb_val + Et_vb_val - Eop_vb_val - Eg_exp);
+    }
+    else
+    {      
+        Eshift.slice(0, last_occupied + 1).fill_(Et_vb_val);
+    }
 
     energyTen = energyTen - Eshift;
 
@@ -526,75 +538,83 @@ int main(int argc, char* argv[])
 
     CGAL::draw(triangulation);
 
-    std::cout << "Calculating M_ij(n,m,k) = <m,k|∇_i|n,k> ∙ <n,k|∇_j|m,k>, where n ∈ VB, m ∈ CB ..." << std::endl;
+    double hwmax = 0.0;
 
     std::vector<torch::Tensor> Mij_ten_list(num_irreducible_kvecs);
     std::vector<torch::Tensor> hw_ten_list(num_irreducible_kvecs);
 
-    double hwmax = 0.0;
-
-    /* std::ofstream Wnm_file("Wnm.csv");
-
-    if(!Wnm_file.is_open()) 
+    if(!wfc_ten_list.empty() && !Gk_ten_list.empty())
     {
-        std::cerr << "Error when creating Wnm.csv file." << std::endl;
+        std::cout << "Calculating M_ij(n,m,k) = <m,k|∇_i|n,k> ∙ <n,k|∇_j|m,k>, where n ∈ VB, m ∈ CB ..." << std::endl;
 
-        return 1;
-    }
+        /* std::ofstream Wnm_file("Wnm.csv");
 
-    Wnm_file << "energy_vb(eV),energy_cb(eV),amp(Å^-2 eV^-2)\n"; */
-
-    for(size_t i = 0; i < num_irreducible_kvecs; ++i)
-    {
-        torch::Tensor wfc_vb = wfc_ten_list[i].slice(0, 0, last_occupied + 1);
-        torch::Tensor wfc_cb = wfc_ten_list[i].slice(0, last_occupied + 1);
-        
-        torch::Tensor amp = (2.0 * M_PI / alat) * torch::einsum("nsg,msg,gd->nmd", 
-                                                                {wfc_vb, wfc_cb.conj(), Gk_ten_list[i]});
-
-        Mij_ten_list[i] = torch::einsum("...i,...j->...ij", {amp, amp.conj()}).reshape({-1, 3, 3});
-
-        torch::Tensor Energy = torch::tensor(irreducible_energy_list[i], 
-                                             torch::TensorOptions().dtype(torch::kFloat64)).to(device);
-
-        Energy = Energy - Eshift;
-
-        torch::Tensor Energy_vb = Energy.slice(0, 0, last_occupied + 1);
-        torch::Tensor Energy_cb = Energy.slice(0, last_occupied + 1);
-
-        hw_ten_list[i] = (Energy_cb.unsqueeze(0) - Energy_vb.unsqueeze(1)).reshape({-1});
-
-        hwmax = std::max({hwmax, torch::amax(hw_ten_list[i]).item<double>()});
-
-        /* torch::Tensor dEnm2 = (Energy_cb.unsqueeze(0) - Energy_vb.unsqueeze(1)).pow_(2.0);
-        torch::Tensor Wnm = amp.norm(2, 2).pow_(2.0) / dEnm2;
-
-        int64_t num_vb = Wnm.size(0);
-        int64_t num_cb = Wnm.size(1);
-
-        torch::Tensor Wnm_cpu = Wnm.cpu();
-        torch::Tensor Energy_vb_cpu = Energy_vb.cpu();
-        torch::Tensor Energy_cb_cpu = Energy_cb.cpu();
-
-        double* Wnm_ptr = Wnm_cpu.data_ptr<double>();
-        double* Energy_vb_ptr = Energy_vb_cpu.data_ptr<double>();
-        double* Energy_cb_ptr = Energy_cb_cpu.data_ptr<double>();
-
-        for(int64_t n = 0; n < num_vb; ++n) 
+        if(!Wnm_file.is_open()) 
         {
-            for(int64_t m = 0; m < num_cb; ++m) 
+            std::cerr << "Error when creating Wnm.csv file." << std::endl;
+
+            return 1;
+        }
+
+        Wnm_file << "energy_vb(eV),energy_cb(eV),amp(Å^-2 eV^-2)\n"; */
+
+        for(size_t i = 0; i < num_irreducible_kvecs; ++i)
+        {
+            torch::Tensor wfc_vb = wfc_ten_list[i].slice(0, 0, last_occupied + 1);
+            torch::Tensor wfc_cb = wfc_ten_list[i].slice(0, last_occupied + 1);
+
+            torch::Tensor amp = (2.0 * M_PI / alat) * torch::einsum("nsg,msg,gd->nmd", 
+                                                                    {wfc_vb, wfc_cb.conj(), Gk_ten_list[i]});
+
+            Mij_ten_list[i] = torch::einsum("...i,...j->...ij", {amp, amp.conj()}).reshape({-1, 3, 3});
+
+            torch::Tensor Energy = torch::tensor(irreducible_energy_list[i], 
+                                                 torch::TensorOptions().dtype(torch::kFloat64)).to(device);
+
+            Energy = Energy - Eshift;
+
+            torch::Tensor Energy_vb = Energy.slice(0, 0, last_occupied + 1);
+            torch::Tensor Energy_cb = Energy.slice(0, last_occupied + 1);
+
+            hw_ten_list[i] = (Energy_cb.unsqueeze(0) - Energy_vb.unsqueeze(1)).reshape({-1});
+
+            hwmax = std::max({hwmax, torch::amax(hw_ten_list[i]).item<double>()});
+
+            /* torch::Tensor dEnm2 = (Energy_cb.unsqueeze(0) - Energy_vb.unsqueeze(1)).pow_(2.0);
+            torch::Tensor Wnm = amp.norm(2, 2).pow_(2.0) / dEnm2;
+
+            int64_t num_vb = Wnm.size(0);
+            int64_t num_cb = Wnm.size(1);
+
+            torch::Tensor Wnm_cpu = Wnm.cpu();
+            torch::Tensor Energy_vb_cpu = Energy_vb.cpu();
+            torch::Tensor Energy_cb_cpu = Energy_cb.cpu();
+
+            double* Wnm_ptr = Wnm_cpu.data_ptr<double>();
+            double* Energy_vb_ptr = Energy_vb_cpu.data_ptr<double>();
+            double* Energy_cb_ptr = Energy_cb_cpu.data_ptr<double>();
+
+            for(int64_t n = 0; n < num_vb; ++n) 
             {
-                Wnm_file << Energy_vb_ptr[n] << "," << Energy_cb_ptr[m] << "," << Wnm_ptr[n * num_cb + m] << "\n";
-            }
-        } */
+                for(int64_t m = 0; m < num_cb; ++m) 
+                {
+                    Wnm_file << Energy_vb_ptr[n] << "," << Energy_cb_ptr[m] << "," << Wnm_ptr[n * num_cb + m] << "\n";
+                }
+            } */
+        }
+
+        wfc_ten_list.clear();
+        Gk_ten_list.clear();
+
+        //Wnm_file.close();
+
+        std::cout << "M_ij(n,m,k) were calculated." << std::endl;
     }
-
-    wfc_ten_list.clear();
-    Gk_ten_list.clear();
-
-    //Wnm_file.close();
-
-    std::cout << "M_ij(n,m,k) were calculated." << std::endl;
+    else
+    {
+        Mij_ten_list.clear();
+        hw_ten_list.clear();
+    }
 
     std::cout << "Calculating group velocity vectors in the Brillouin zone..." << std::endl;
 
@@ -822,148 +842,157 @@ int main(int argc, char* argv[])
 
     std::cout << "The density of states and the average magnitude of group velocity were calculated." << std::endl;
 
-    std::cout << "Calculating dielectric permittivity..." << std::endl;
+    torch::Tensor hwmesh = torch::linspace(0.0, 1.0, 2L, torch::TensorOptions().dtype(torch::kFloat64)).to(device);
 
-    torch::Tensor hwmesh = torch::linspace(0.0, hwmax, static_cast<int64_t>(std::trunc(hwmax / En_step)) + 1L, 
-                                           torch::TensorOptions().dtype(torch::kFloat64)).to(device);
-                                    
-    torch::Tensor hwmesh_ext = hwmesh.unsqueeze(-1);
+    int64_t num_hwpoints = hwmesh.size(0);
 
-    const int64_t num_hwpoints = hwmesh.size(0);
-    const int64_t num_bpairs = hw_ten_list[0].size(0);
+    torch::Tensor Eps1 = torch::zeros({num_hwpoints, 3, 3}, torch::TensorOptions().dtype(torch::kFloat64)).to(device);
+    torch::Tensor Eps2 = torch::zeros({num_hwpoints, 3, 3}, torch::TensorOptions().dtype(torch::kFloat64)).to(device);
 
-    torch::Tensor Eps2 = torch::zeros({num_hwpoints, 3, 3}, 
-                                      torch::TensorOptions().dtype(torch::kFloat64)).to(device);
+    if(!Mij_ten_list.empty() && !hw_ten_list.empty())
+    {
+        std::cout << "Calculating dielectric permittivity..." << std::endl;
 
-    torch::Tensor pdos2 = torch::zeros({num_hwpoints, num_bpairs}, 
-                                       torch::TensorOptions().dtype(torch::kComplexDouble)).to(device);
+        hwmesh = torch::linspace(0.0, hwmax, static_cast<int64_t>(std::trunc(hwmax / En_step)) + 1L, 
+                                 torch::TensorOptions().dtype(torch::kFloat64)).to(device);
 
-    torch::Tensor peps2 = torch::zeros({num_hwpoints, num_bpairs, 3, 3}, 
-                                       torch::TensorOptions().dtype(torch::kComplexDouble)).to(device);
+        torch::Tensor hwmesh_ext = hwmesh.unsqueeze(-1);
 
-    for(size_t i = 0; i < tetrahedron_list.size(); ++i)
-    {        
-        std::cout << "Tetrahedra: " << i + 1UL << "/" << tetrahedron_list.size() << "\r" << std::flush;
+        num_hwpoints = hwmesh.size(0);
+        const int64_t num_bpairs = hw_ten_list[0].size(0);
 
-        int64_t v1 = rkvec_to_irrkvec[tetrahedron_list[i][0]];
-        int64_t v2 = rkvec_to_irrkvec[tetrahedron_list[i][1]];
-        int64_t v3 = rkvec_to_irrkvec[tetrahedron_list[i][2]];
-        int64_t v4 = rkvec_to_irrkvec[tetrahedron_list[i][3]];
+        Eps2 = torch::zeros({num_hwpoints, 3, 3}, 
+                            torch::TensorOptions().dtype(torch::kFloat64)).to(device);
 
-        torch::Tensor tethwTen = torch::stack({hw_ten_list[v1], hw_ten_list[v2], hw_ten_list[v3], hw_ten_list[v4]}, 0);
-        torch::Tensor tetMijTen = torch::stack({Mij_ten_list[v1], Mij_ten_list[v2], Mij_ten_list[v3], Mij_ten_list[v4]}, 0);
+        torch::Tensor pdos2 = torch::zeros({num_hwpoints, num_bpairs}, 
+                                           torch::TensorOptions().dtype(torch::kComplexDouble)).to(device);
 
-        auto [tethwTen_sort, sortIDs] = torch::sort(tethwTen, 0);
-        torch::Tensor tetMijTen_sort = torch::take_along_dim(tetMijTen, sortIDs.unsqueeze(-1).unsqueeze(-1), 0);
+        torch::Tensor peps2 = torch::zeros({num_hwpoints, num_bpairs, 3, 3}, 
+                                           torch::TensorOptions().dtype(torch::kComplexDouble)).to(device);
 
-        torch::Tensor e1 = tethwTen_sort[0].unsqueeze(0) - 2.0 * Constants::en_eps;
-        torch::Tensor e2 = tethwTen_sort[1].unsqueeze(0) - Constants::en_eps;
-        torch::Tensor e3 = tethwTen_sort[2].unsqueeze(0) + Constants::en_eps;
-        torch::Tensor e4 = tethwTen_sort[3].unsqueeze(0) + 2.0 * Constants::en_eps;
+        for(size_t i = 0; i < tetrahedron_list.size(); ++i)
+        {        
+            std::cout << "Tetrahedra: " << i + 1UL << "/" << tetrahedron_list.size() << "\r" << std::flush;
 
-        torch::Tensor e21 = e2 - e1;
-        torch::Tensor e31 = e3 - e1;
-        torch::Tensor e41 = e4 - e1;
-        torch::Tensor e32 = e3 - e2;
-        torch::Tensor e42 = e4 - e2;
-        torch::Tensor e43 = e4 - e3;
-        torch::Tensor em1 = hwmesh_ext - e1;
-        torch::Tensor em2 = hwmesh_ext - e2;
-        torch::Tensor em3 = hwmesh_ext - e3;
-        torch::Tensor em4 = hwmesh_ext - e4;
+            int64_t v1 = rkvec_to_irrkvec[tetrahedron_list[i][0]];
+            int64_t v2 = rkvec_to_irrkvec[tetrahedron_list[i][1]];
+            int64_t v3 = rkvec_to_irrkvec[tetrahedron_list[i][2]];
+            int64_t v4 = rkvec_to_irrkvec[tetrahedron_list[i][3]];
 
-        torch::Tensor cond2 = (hwmesh_ext > e1) & (hwmesh_ext <= e2);
+            torch::Tensor tethwTen = torch::stack({hw_ten_list[v1], hw_ten_list[v2], hw_ten_list[v3], hw_ten_list[v4]}, 0);
+            torch::Tensor tetMijTen = torch::stack({Mij_ten_list[v1], Mij_ten_list[v2], Mij_ten_list[v3], Mij_ten_list[v4]}, 0);
 
-        torch::Tensor gterm2 = 3.0 * em1.pow(2.0) / (e21 * e31 * e41);
+            auto [tethwTen_sort, sortIDs] = torch::sort(tethwTen, 0);
+            torch::Tensor tetMijTen_sort = torch::take_along_dim(tetMijTen, sortIDs.unsqueeze(-1).unsqueeze(-1), 0);
 
-        torch::Tensor vterm21 = -(em2 / e21 + em3 / e31 + em4 / e41) / 3.0;
-        torch::Tensor vterm22 = em1 / e21 / 3.0;
-        torch::Tensor vterm23 = em1 / e31 / 3.0;
-        torch::Tensor vterm24 = em1 / e41 / 3.0;
+            torch::Tensor e1 = tethwTen_sort[0].unsqueeze(0) - 2.0 * Constants::en_eps;
+            torch::Tensor e2 = tethwTen_sort[1].unsqueeze(0) - Constants::en_eps;
+            torch::Tensor e3 = tethwTen_sort[2].unsqueeze(0) + Constants::en_eps;
+            torch::Tensor e4 = tethwTen_sort[3].unsqueeze(0) + 2.0 * Constants::en_eps;
 
-        torch::Tensor vterm2 = torch::stack({vterm21, vterm22, vterm23, vterm24}, 0).to(torch::kComplexDouble);
-        vterm2 = torch::einsum("kpn,knij->pnij", {vterm2, tetMijTen_sort});
+            torch::Tensor e21 = e2 - e1;
+            torch::Tensor e31 = e3 - e1;
+            torch::Tensor e41 = e4 - e1;
+            torch::Tensor e32 = e3 - e2;
+            torch::Tensor e42 = e4 - e2;
+            torch::Tensor e43 = e4 - e3;
+            torch::Tensor em1 = hwmesh_ext - e1;
+            torch::Tensor em2 = hwmesh_ext - e2;
+            torch::Tensor em3 = hwmesh_ext - e3;
+            torch::Tensor em4 = hwmesh_ext - e4;
 
-        torch::where_out(pdos2, cond2, gterm2, pdos2);
-        torch::where_out(peps2, cond2.unsqueeze(-1).unsqueeze(-1), vterm2, peps2);
+            torch::Tensor cond2 = (hwmesh_ext > e1) & (hwmesh_ext <= e2);
 
-        torch::Tensor cond3 = (hwmesh_ext > e2) & (hwmesh_ext <= e3);
+            torch::Tensor gterm2 = 3.0 * em1.pow(2.0) / (e21 * e31 * e41);
 
-        torch::Tensor gterm3 = 3.0 * (em1 + em2 + em2.pow(2.0) * (e1 + e2 - e3 - e4) / (e32 * e42)) / (e31 * e41);
+            torch::Tensor vterm21 = -(em2 / e21 + em3 / e31 + em4 / e41) / 3.0;
+            torch::Tensor vterm22 = em1 / e21 / 3.0;
+            torch::Tensor vterm23 = em1 / e31 / 3.0;
+            torch::Tensor vterm24 = em1 / e41 / 3.0;
 
-        torch::Tensor vterm31 = (-em4 / e41 - e42 * em1 * em3.pow(2.0) / (e31 * e42 * em1 * em3 + e31.pow(2.0) * em2 * em4)) / 3.0;
-        torch::Tensor vterm32 = (-em3 / e32 - e31 * em2 * em4.pow(2.0) / (e31 * e42 * em2 * em4 + e42.pow(2.0) * em1 * em3)) / 3.0;
-        torch::Tensor vterm33 = (em2 / e32 + e42 * em3 * em1.pow(2.0) / (e31 * e42 * em1 * em3 + e31.pow(2.0) * em2 * em4)) / 3.0;
-        torch::Tensor vterm34 = (em1 / e41 + e31 * em4 * em2.pow(2.0) / (e31 * e42 * em2 * em4 + e42.pow(2.0) * em1 * em3)) / 3.0;
+            torch::Tensor vterm2 = torch::stack({vterm21, vterm22, vterm23, vterm24}, 0).to(torch::kComplexDouble);
+            vterm2 = torch::einsum("kpn,knij->pnij", {vterm2, tetMijTen_sort});
 
-        torch::Tensor vterm3 = torch::stack({vterm31, vterm32, vterm33, vterm34}, 0).to(torch::kComplexDouble);
-        vterm3 = torch::einsum("kpn,knij->pnij", {vterm3, tetMijTen_sort});
+            torch::where_out(pdos2, cond2, gterm2, pdos2);
+            torch::where_out(peps2, cond2.unsqueeze(-1).unsqueeze(-1), vterm2, peps2);
 
-        torch::where_out(pdos2, cond3, gterm3, pdos2);
-        torch::where_out(peps2, cond3.unsqueeze(-1).unsqueeze(-1), vterm3, peps2);
+            torch::Tensor cond3 = (hwmesh_ext > e2) & (hwmesh_ext <= e3);
 
-        torch::Tensor cond4 = (hwmesh_ext > e3) & (hwmesh_ext <= e4);
+            torch::Tensor gterm3 = 3.0 * (em1 + em2 + em2.pow(2.0) * (e1 + e2 - e3 - e4) / (e32 * e42)) / (e31 * e41);
 
-        torch::Tensor gterm4 = 3.0 * em4.pow(2.0) / (e41 * e42 * e43);
+            torch::Tensor vterm31 = (-em4 / e41 - e42 * em1 * em3.pow(2.0) / (e31 * e42 * em1 * em3 + e31.pow(2.0) * em2 * em4)) / 3.0;
+            torch::Tensor vterm32 = (-em3 / e32 - e31 * em2 * em4.pow(2.0) / (e31 * e42 * em2 * em4 + e42.pow(2.0) * em1 * em3)) / 3.0;
+            torch::Tensor vterm33 = (em2 / e32 + e42 * em3 * em1.pow(2.0) / (e31 * e42 * em1 * em3 + e31.pow(2.0) * em2 * em4)) / 3.0;
+            torch::Tensor vterm34 = (em1 / e41 + e31 * em4 * em2.pow(2.0) / (e31 * e42 * em2 * em4 + e42.pow(2.0) * em1 * em3)) / 3.0;
 
-        torch::Tensor vterm41 = -em4 / e41 / 3.0;
-        torch::Tensor vterm42 = -em4 / e42 / 3.0;
-        torch::Tensor vterm43 = -em4 / e43 / 3.0;
-        torch::Tensor vterm44 = (em1 / e41 + em2 / e42 + em3 / e43) / 3.0;
+            torch::Tensor vterm3 = torch::stack({vterm31, vterm32, vterm33, vterm34}, 0).to(torch::kComplexDouble);
+            vterm3 = torch::einsum("kpn,knij->pnij", {vterm3, tetMijTen_sort});
 
-        torch::Tensor vterm4 = torch::stack({vterm41, vterm42, vterm43, vterm44}, 0).to(torch::kComplexDouble);
-        vterm4 = torch::einsum("kpn,knij->pnij", {vterm4, tetMijTen_sort});
+            torch::where_out(pdos2, cond3, gterm3, pdos2);
+            torch::where_out(peps2, cond3.unsqueeze(-1).unsqueeze(-1), vterm3, peps2);
 
-        torch::where_out(pdos2, cond4, gterm4, pdos2);
-        torch::where_out(peps2, cond4.unsqueeze(-1).unsqueeze(-1), vterm4, peps2);
+            torch::Tensor cond4 = (hwmesh_ext > e3) & (hwmesh_ext <= e4);
 
-        peps2 *= pdos2.unsqueeze(-1).unsqueeze(-1);
+            torch::Tensor gterm4 = 3.0 * em4.pow(2.0) / (e41 * e42 * e43);
 
-        torch::Tensor result = peps2.sum(1);
+            torch::Tensor vterm41 = -em4 / e41 / 3.0;
+            torch::Tensor vterm42 = -em4 / e42 / 3.0;
+            torch::Tensor vterm43 = -em4 / e43 / 3.0;
+            torch::Tensor vterm44 = (em1 / e41 + em2 / e42 + em3 / e43) / 3.0;
 
-        if(use_inv)
-        {
-            Eps2 += torch::real(result + result.transpose(1, 2).conj()) * tetrahedron_volume_list[i];
+            torch::Tensor vterm4 = torch::stack({vterm41, vterm42, vterm43, vterm44}, 0).to(torch::kComplexDouble);
+            vterm4 = torch::einsum("kpn,knij->pnij", {vterm4, tetMijTen_sort});
+
+            torch::where_out(pdos2, cond4, gterm4, pdos2);
+            torch::where_out(peps2, cond4.unsqueeze(-1).unsqueeze(-1), vterm4, peps2);
+
+            peps2 *= pdos2.unsqueeze(-1).unsqueeze(-1);
+
+            torch::Tensor result = peps2.sum(1);
+
+            if(use_inv)
+            {
+                Eps2 += torch::real(result + result.transpose(1, 2).conj()) * tetrahedron_volume_list[i];
+            }
+            else
+            {
+                Eps2 += torch::real(result) * tetrahedron_volume_list[i];
+            }
+
+            pdos2.zero_();
+            peps2.zero_();
         }
-        else
-        {
-            Eps2 += torch::real(result) * tetrahedron_volume_list[i];
-        }
 
-        pdos2.zero_();
-        peps2.zero_();
+        pdos2 = torch::Tensor(); 
+        peps2 = torch::Tensor();
+
+        torch::Tensor hwmeshsqr = hwmesh.pow(2);
+
+        Eps2 /= (hwmeshsqr + 1.0E-10).unsqueeze(-1).unsqueeze(-1);
+
+        Eps2 *= gsp * Constants::Ry * Constants::aB * std::pow(Constants::hbar * Constants::c, 4.0) 
+              / (M_PI * std::pow(Constants::me, 2.0)) 
+              * std::pow(2.0 * M_PI / alat, 3.0) * 1.0E32;
+
+        torch::Tensor Ker = hwmeshsqr.unsqueeze(0) - hwmeshsqr.unsqueeze(1); 
+
+        torch::Tensor denom = Ker.pow(2).add_(std::pow(smearing, 4.0));
+
+        Ker /= denom;
+        denom = torch::Tensor(); 
+        Ker *= hwmesh.unsqueeze(0);
+
+        torch::Tensor dhwmesh = hwmesh.slice(0, 1, num_hwpoints) - hwmesh.slice(0, 0, num_hwpoints - 1);
+
+        torch::Tensor zero = torch::zeros({1}, hwmesh.options());
+        torch::Tensor weights = 0.5 * (torch::cat({zero, dhwmesh}, 0) + torch::cat({dhwmesh, zero}, 0));
+
+        Ker *= weights.unsqueeze(0);
+
+        Eps1 = torch::einsum("nm,mij->nij", {Ker, Eps2}).mul_(2.0 / M_PI).add_(1.0);
+
+        std::cout << "Dielectric permittivity was calculated." << std::endl;
     }
-
-    pdos2 = torch::Tensor(); 
-    peps2 = torch::Tensor();
-
-    torch::Tensor hwmeshsqr = hwmesh.pow(2);
-
-    Eps2 /= (hwmeshsqr + 1.0E-10).unsqueeze(-1).unsqueeze(-1);
-
-    Eps2 *= gsp * Constants::Ry * Constants::aB * std::pow(Constants::hbar * Constants::c, 4.0) 
-          / (M_PI * std::pow(Constants::me, 2.0)) 
-          * std::pow(2.0 * M_PI / alat, 3.0) * 1.0E32;
-
-    torch::Tensor Ker = hwmeshsqr.unsqueeze(0) - hwmeshsqr.unsqueeze(1); 
-
-    torch::Tensor denom = Ker.pow(2).add_(std::pow(smearing, 4.0));
-
-    Ker /= denom;
-    denom = torch::Tensor(); 
-    Ker *= hwmesh.unsqueeze(0);
-
-    torch::Tensor dhwmesh = hwmesh.slice(0, 1, num_hwpoints) - hwmesh.slice(0, 0, num_hwpoints - 1);
-
-    torch::Tensor zero = torch::zeros({1}, hwmesh.options());
-    torch::Tensor weights = 0.5 * (torch::cat({zero, dhwmesh}, 0) + torch::cat({dhwmesh, zero}, 0));
-
-    Ker *= weights.unsqueeze(0);
-
-    torch::Tensor Eps1 = torch::einsum("nm,mij->nij", {Ker, Eps2}).mul_(2.0 / M_PI).add_(1.0);
-    Ker = torch::Tensor(); 
-
-    std::cout << "Dielectric permittivity was calculated." << std::endl;
 
     auto finish = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = finish - start;
