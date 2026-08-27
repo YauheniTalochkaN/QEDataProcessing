@@ -120,7 +120,6 @@ int main(int argc, char* argv[])
     std::string data_schema_file = yaml_node["data_schema_file"].as<std::string>();
     bool use_inv = yaml_node["use_inv"].as<bool>();
     double Eg_exp = yaml_node["Eg_exp"].as<double>();
-    double gsp = yaml_node["gsp"].as<double>();
     double En_step = yaml_node["En_step"].as<double>();
     double smearing = yaml_node["smearing"].as<double>();
     int32_t num_k_neighbors = yaml_node["num_k_neighbors"].as<int32_t>();
@@ -151,6 +150,34 @@ int main(int argc, char* argv[])
         return result;
     };
 
+    auto parseBoolLine = [](std::string str) -> std::vector<bool>
+    {
+        std::replace(str.begin(), str.end(), ',', ' ');
+        std::replace(str.begin(), str.end(), ';', ' ');
+
+        std::istringstream iss(str);
+        std::vector<bool> result;
+
+        std::string token;
+
+        while(iss >> token)
+        {
+            std::transform(token.begin(), token.end(), token.begin(),
+                           [](unsigned char c) {return std::tolower(c);});
+
+            if(token == "true")
+            {
+                result.push_back(true);
+            }
+            else if(token == "false")
+            {
+                result.push_back(false);
+            }
+        }
+
+        return result;
+    };
+
     std::filesystem::path data_schema_path = std::filesystem::path(data_dir) / data_schema_file;
 
     pugi::xml_document xml_doc;
@@ -164,7 +191,6 @@ int main(int argc, char* argv[])
         std::exit(1);
     }
 
-    int64_t last_occupied = 0L;
     std::vector<TVector3> irreducible_kvec_list;
     std::vector<std::vector<double>> irreducible_energy_list;
 
@@ -188,25 +214,31 @@ int main(int argc, char* argv[])
 
             irreducible_energy_list.push_back(vals);
         }
-
-        for(pugi::xml_node occv_node : ks_node.children("occupations")) 
-        {
-            std::vector<double> vals = parseDoubleLine(occv_node.child_value());
-
-            auto it = std::find_if(vals.begin(), vals.end(),
-                                   [](double x) {return std::abs(x) < 1.0E-4;});
-            
-            if(it != vals.end()) 
-            {
-                int64_t idx = std::distance(vals.begin(), it) - 1UL;
-                
-                last_occupied = std::max(last_occupied, idx);
-            }
-        }
     }
 
     const size_t num_irreducible_kvecs = irreducible_kvec_list.size();
     const int64_t num_branches = irreducible_energy_list[0].size();
+
+    pugi::xml_node band_structure_node = xml_doc.select_node("//band_structure").node();
+
+    pugi::xml_node noncolin_node = band_structure_node.child("noncolin");
+    pugi::xml_node nelec_node = band_structure_node.child("nelec");
+
+    double gsp = 2.0;
+    int64_t last_occupied = 0L;
+
+    if(noncolin_node)
+    {      
+        if(parseBoolLine(noncolin_node.child_value()).at(0))
+        {
+            gsp = 1.0;
+        }
+    }
+    
+    if(nelec_node)
+    {
+        last_occupied = std::llround(parseDoubleLine(nelec_node.child_value()).at(0) / gsp) - 1L;
+    }
     
     double alat = Constants::aB * xml_doc.select_node("//atomic_structure").node().attribute("alat").as_double();
     
